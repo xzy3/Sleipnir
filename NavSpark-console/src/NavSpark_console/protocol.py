@@ -1,7 +1,8 @@
 import asyncio
 from operator import xor
 from enum import IntEnum,Enum,auto,Flag,IntFlag
-from functools import partial
+from functools import partial,reduce
+from pprint import pprint
 
 import attr
 import bitstruct
@@ -10,6 +11,11 @@ ACK_TYPE = 0x83
 NACK_TYPE = 0x84
 
 MESSAGES_ = { }
+
+def hexdump(b):
+    print(b.hex(' ', 1))
+
+packet_preamble = bitstruct.compile('u16u8>')
 
 class NavSparkRawProtocol(asyncio.Protocol):
     def connection_made(self, transport):
@@ -40,42 +46,56 @@ class NavSparkRawProtocol(asyncio.Protocol):
         await self.ack_event.wait()
 
     def data_received(self, data):
-        print('data recieved', repr(data))
-        self.buffer.append(data)
+        try:
+            self.buffer.extend(data)
 
-        packet_end = self.buffer.find(b'\x0D\x0A')
-        if packet_start == -1:
-            return
+            packet_end = self.buffer.find(b'\x0D\x0A')
+            if packet_end == -1:
+                return
 
-        packet_start = self.buffer.rfind(b'\xA0\xA1', start=packet_end)
-        if packet_start == -1:
-            # we found the end of a packet without a beginning. that's an error.
-            self._update_buffer()
-            self._send_nack()
-            return
+            packet_start = self.buffer.rfind(b'\xA0\xA1', 0, packet_end)
+            if packet_start == -1:
+                # we found the end of a packet without a beginning. that's an error.
+                print('missing packet start')
+                return
 
-        l,packet_type = packet_preamble.unpack_from(buffer=self.buffer, offset=packet_start+2)
-        if l != packet_end - packet_start - 5:
-            # packet length is wrong
-            self._update_buffer()
-            self._send_nack()
-            return
+            l,packet_type = packet_preamble.unpack_from(self.buffer[packet_start+2:])
+            if l != packet_end - packet_start - 5:
+                # packet length is wrong
+                return
 
-        lrc = reduce(xor, self.buffer[packet_start+4:packet_end])
-        if lrc != 0:
-            # packet lrc wrong
-            self._update_buffer()
-            self._send_nack()
-            return
+            lrc = reduce(xor, self.buffer[packet_start+4:packet_end])
+            if lrc != 0:
+                # packet lrc wrong
+                print('lrc error')
+                self._update_buffer(packet_end)
+                return
 
-        if packet_type == ACK_TYPE or packet_type == NACK_TYPE:
-            self.ack_event.set()
-            return
+            if packet_type == ACK_TYPE or packet_type == NACK_TYPE:
+                self.ack_event.set()
+                return
 
-        self._send_ack()
+            try:
+                msg_cls = MESSAGES_[packet_type]
+
+                # +4 to skip header and length
+                # -1 to ignore the LRC
+                print(msg_cls.unpack(self.buffer[packet_start+4:packet_end-1]))
+            except KeyError:
+                print("unknown message type", hex(packet_type))
+
+            finally:
+                self._update_buffer(packet_end)
+
+        except Exception as ex:
+            print(ex)
+
 
     def connection_lost(self, exc):
         self.transport.loop.stop()
+
+    def resume_reading(self):
+        self.transport.resume_reading()
 
 class MessageDirection(Flag):
     INPUT = auto()
@@ -98,28 +118,28 @@ def message_type(
         hash=hash, init=init, metadata=metadata, type=type, converter=converter or type)
 
 def UINT8(**kwargs):
-    return message_type("u8", int, **kwargs)
+    return message_type(">u8", int, **kwargs)
 
 def UINT16(**kwargs):
-    return message_type("u16", int, **kwargs)
+    return message_type(">u16", int, **kwargs)
 
 def UINT32(**kwargs):
-    return message_type("u32", int, **kwargs)
+    return message_type(">u32", int, **kwargs)
 
 def SINT8(**kwargs):
-    return message_type("s8", int, **kwargs)
+    return message_type(">s8", int, **kwargs)
 
 def SINT16(**kwargs):
-    return message_type("s16", int, **kwargs)
+    return message_type(">s16", int, **kwargs)
 
 def SINT32(**kwargs):
-    return message_type("s32", int, **kwargs)
+    return message_type(">s32", int, **kwargs)
 
 def SPFP(**kwargs):
-    return message_type("f32", float, **kwargs)
+    return message_type(">f32", float, **kwargs)
 
 def DPFP(**kwargs):
-    return message_type("f64", float, **kwargs)
+    return message_type(">f64", float, **kwargs)
 
 def ENUM(e, *, size=8, **kwargs):
     return message_type(f"u{size}", e, converter=e, **kwargs)
@@ -132,7 +152,7 @@ class PersistSetting(IntEnum):
     update_to_both = 1
 
 def PERSIST(message_direction=MessageDirection.INPUT, **kwargs):
-    return message_type("u8", PersistSetting,
+    return message_type(">u8", PersistSetting,
         message_direction=message_direction,
         converter=lambda v: PersistSetting(int(v)), **kwargs)
 
@@ -141,7 +161,7 @@ class EnableSetting(IntEnum):
     enable = 1
 
 def ENABELED(**kwargs):
-    return message_type("u8", EnableSetting,
+    return message_type(">u8", EnableSetting,
         converter=lambda v: EnableSetting(int(v)), **kwargs)
 
 def pack_message_(compiled_struct_format, self):
@@ -166,7 +186,7 @@ def message(*msg_ids, direction=MessageDirection.BOTH, message_length=None, inpu
                     type=int,
                     metadata={
                         "NavSpark_console" : {
-                            "format" : "u8",
+                            "format" : ">u8",
                             "direction" : MessageDirection.INPUT
                             }
                         }
@@ -179,7 +199,7 @@ def message(*msg_ids, direction=MessageDirection.BOTH, message_length=None, inpu
                     type=int,
                     metadata={
                         "NavSpark_console" : {
-                            "format" : "u8",
+                            "format" : ">u8",
                             "direction" : MessageDirection.OUTPUT
                             }
                         }
@@ -235,7 +255,7 @@ def arr_message(msg_id, sub_message_cls, *, message_length=None):
                 type=int,
                 metadata={
                     "NavSpark_console" : {
-                        "format" : "u8",
+                        "format" : ">u8",
                         "direction" : MessageDirection.OUTPUT
                     }
                 }
@@ -248,7 +268,7 @@ def arr_message(msg_id, sub_message_cls, *, message_length=None):
                 type=int,
                 metadata={
                     "NavSpark_console" : {
-                        "format" : "u8",
+                        "format" : ">u8",
                         "direction" : MessageDirection.OUTPUT
                     }
                 }),
@@ -283,12 +303,11 @@ def arr_message(msg_id, sub_message_cls, *, message_length=None):
         sub_format_len = bitstruct.calcsize(sub_format)
         def unpack_message_arr(cls, buffer):
             parent_inst = parent_format_compiled.unpack(buffer)
-            (array_len,) = bitstruct.unpack(">u8", buffer, parent_len)
 
             sub_messages = []
-            for i in range(parent_len+1, len(buffer), sub_format_len):
+            for i in range(parent_len, len(buffer)*8, sub_format_len):
                 sub_messages.append(
-                    sub_message_cls(**sub_format_compiled.unpack(buffer, i)))
+                    sub_message_cls(**sub_format_compiled.unpack_from(buffer, offset=i)))
 
             ret = cls(**parent_inst, sub_messages=sub_messages)
             return ret
@@ -502,7 +521,7 @@ class Beidou2D2Subframe:
     words = BYTES(28)
 
 class GPSRawMeasurementIndicator(IntFlag):
-    psudo_range_available = 0b1
+    pseudo_range_available = 0b1
     doppler_frequency_available = 0b10
     carrier_phase_available = 0b100
     cycle_slip_possible = 0b1000
@@ -512,7 +531,7 @@ class GPSRawMeasurementIndicator(IntFlag):
 class RawMeasurement:
     svid = UINT8()
     cn0 = UINT8()
-    psudo_range = DPFP()
+    pseudo_range = DPFP()
     accumulated_carrier_cycle = DPFP()
     doppler_frequency = SPFP()
     measurement_indicator = ENUM(GPSRawMeasurementIndicator)
@@ -577,10 +596,10 @@ class ExtendedRawMeasurement:
     frequency_id = message_type(">u4", int)
     lock_time_indicator = message_type(">u4", int)
     cn0 = UINT8()
-    psudorange = DPFP()
+    pseudorange = DPFP()
     accumulated_carrier_cycle = DPFP()
     doppler_frequency = SPFP()
-    psudorange_standard_dev = UINT8()
+    pseudorange_standard_dev = UINT8()
     accumulated_carrier_cycle_standard_Dev = UINT8()
     doppler_freq_standard_dev = UINT8()
     channel_indicator = ENUM(ExtendedRawChannelIndicator, size=16)
@@ -600,3 +619,42 @@ class ExtendedRawMeasurements:
     measurement_period = UINT16()
     measurement_indicator = ENUM(MeasurementIndicatorFlags)
     reserved = BYTES(1)
+
+if __name__ == '__main__':
+    import serial_asyncio
+
+    async def reader():
+        transport, protocol = await serial_asyncio.create_serial_connection(
+                loop, NavSparkRawProtocol, '/dev/ttyUSB0',
+                baudrate=115200)
+
+        while True:
+            await asyncio.sleep(0.3)
+            protocol.resume_reading()
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(reader())
+    loop.close()
+
+    #msg = RawMeasurementsArray.unpack(
+    #    b'\xDD\x3D\x0F\x02\x2B\x41\x74\x42\xDB\x76\x55\xFA\x29\xC0\xE2\xE4\x02\x21\x5A\x00\x00'
+    #    b'\x44\x20\x80\x00\x07\x09\x29\x41\x77\x8C\xF0\xA9\xE7\x0C\x43\xC0\xF9\x72\x54\x2E\xEB'
+    #    b'\x80\x00\x44\xE3\xA0\x00\x07\x0A\x28\x41\x75\xCA\x96\x91\xA9\xE9\x23\x41\x04\x7D\xB1'
+    #    b'\xE9\xA9\x80\x00\xC5\x31\x20\x00\x07\x05\x2B\x41\x74\x9E\xBE\xEE\x17\x8C\x6A\x40\xD3'
+    #    b'\x71\xD4\x80\xCF\x00\x00\xC3\xAE\x00\x00\x07\x1A\x2E\x41\x75\x02\x83\xE5\xEC\xD7\x65'
+    #    b'\xC1\x04\x6D\x73\xBD\xE6\x20\x00\x45\x33\x30\x00\x07\x0C\x28\x41\x77\xC1\xE0\x1D\xA7'
+    #    b'\x2E\xC1\x40\xFF\x79\x4C\xC9\x14\x80\x00\xC5\x0D\x80\x00\x07\x11\x28\x41\x77\xE7\xB0'
+    #    b'\xE8\x15\x9A\xA8\x41\x0C\x87\x99\x0C\xFA\xA0\x00\xC5\x80\xD8\x00\x07\x0F\x27\x41\x77'
+    #    b'\x93\x96\x77\x03\x2B\x0A\xC1\x06\xBF\x2C\x49\x05\x60\x00\x45\x4F\xB0\x00\x07\x04\x2C'
+    #    b'\x41\x75\xBA\x4E\xB0\x68\x2B\x43\x40\xFB\x25\xC7\xA3\xB6\xC0\x00\xC4\xFE\x60\x00\x07'
+    #    b'\x07\x26\x41\x78\x48\x7F\x72\xDF\xC5\x81\xC0\xD0\x89\xC8\xBF\x96\x00\x00\x43\xA7\x80'
+    #    b'\x00\x07\x0D\x1D\x00\x00\x00\x00\x00\x00\x00\x00\x41\x05\xF9\xA2\xD6\x0D\x40\x00\xC5'
+    #    b'\x66\x00\x00\x16\x08\x27\x41\x78\x6A\xD7\xA4\x71\x2A\x50\xC0\xEF\x02\x44\x2E\x09\x80'
+    #    b'\x00\x44\xA2\x80\x00\x07\x19\x23\x41\x78\x7E\xE4\x8B\x0C\x9E\x26\x40\xE6\xAD\x04\x2B'
+    #    b'\x85\x80\x00\xC4\x98\x20\x00\x07\x42\x1F\x41\x75\x27\xEA\xE2\x16\x7D\x10\x41\x06\xD6'
+    #    b'\x0A\x57\x6B\x00\x00\xC5\x53\x10\x00\x07\x52\x1E\x00\x00\x00\x00\x00\x00\x00\x00\xC0'
+    #    b'\xFE\x83\x49\x5D\xA7\x00\x00\x45\x16\xC0\x00\x06'
+    #)
+
+    #for smsg in msg.sub_messages:
+    #    pprint(smsg)
