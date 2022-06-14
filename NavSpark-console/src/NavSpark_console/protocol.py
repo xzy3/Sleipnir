@@ -829,6 +829,21 @@ class ExtendedRawMeasurements:
     measurement_indicator = ENUM(MeasurementIndicatorFlags)
     reserved = BYTES(1)
 
+@message(direction=MessageDirection.OUTPUT, message_length=7)
+class GNSSSatelliteStatus:
+    channel_id = UINT8()
+    signal_type = message_type(">u4", int)
+    gnss_type = message_type(">u4", GNSSType)
+    svid = UINT8()
+    sv_status_indicator = ENUM(SattelliteStatusIndicator)
+    ura_index = UINT8()
+    cn0 = SINT8()
+    channel_status_indicator = ENUM(SattelliteChannelStatusIndicator)
+
+@arr_message(0xE7, GNSSSatelliteStatus, message_length=4)
+class GNSSSatelliteStatuses:
+    version = UINT8()
+    iod = UINT8()
 
 if __name__ == "__main__":
     import serial_asyncio

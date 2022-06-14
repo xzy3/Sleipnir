@@ -372,6 +372,28 @@ class TestGLONASSEphemeris(MessageTestCase):
         )
 
 
+class TestReceiverSoftwareVersion(MessageTestCase):
+    def test_unpack(self):
+        self.assertUnpacked(
+            ReceiverSoftwareVersion,
+            b"\x80\x01\x00\x01\x01\x01\x00\x01\x03\x0E\x00\x07\x01\x12",
+            software_type=1,
+            kernel_version=0x00010101,
+            odm_version=0x0001030E,
+            revision=0x00070112,
+        )
+
+
+class TestReceiverSoftwareCRC(MessageTestCase):
+    def test_unpack(self):
+        self.assertUnpacked(
+            ReceiverSoftwareCRC,
+            b"\x81\x01\x98\x76",
+            software_type=1,
+            crc=0x9876,
+        )
+
+
 class TestMeasurementTimeInformation(MessageTestCase):
     def test_unpack(self):
         self.assertUnpacked(
@@ -1037,4 +1059,59 @@ class TestExtendedRawMeasurement(MessageTestCase):
             measurement_period=0x03E8,
             measurement_indicator=0x00,
             reserved=b"\x00",
+        )
+
+
+class TestGNSSSatelliteStatuses(MessageTestCase):
+    def test_unpack(self):
+        packed_data = (
+            b"\xE7\x01\x07\x14\x01\x00\x01\x01\xFF\x2E\x03\x02\x00\x07\x01\xFF\x2D\x03\x03"
+            b"\x00\x03\x01\xFF\x2C\x03\x04\x00\x1E\x01\xFF\x2B\x03\x05\x00\x16\x01\xFF\x2D"
+            b"\x03\x0E\x05\x03\x00\x00\x2C\x07\x0F\x05\x07\x00\x00\x2F\x03\x10\x05\x08\x00"
+            b"\x00\x2D\x03\x11\x05\x0A\x00\x00\x2C\x03\x12\x05\x01\x00\x00\x2B\x03\x19\x03"
+            b"\x01\x01\x01\x2C\x07\x1A\x03\x0D\x00\x01\x28\x03\x1B\x03\x12\x00\x01\x00\x01"
+            b"\x2B\x55\x03\x00\x00\x20\x07\x2C\x55\x07\x00\x00\x21\x03\x2D\x55\x08\x00\x00"
+            b"\x21\x03\x2E\x55\x0A\x00\x00\x21\x03\x2F\x55\x01\x00\x00\x21\x03\x31\x53\x01"
+            b"\x01\x01\x25\x07\x32\x53\x0D\x00\x01\x22\x03"
+        )
+
+        expected_data = [
+            (0x01, 0, 0, 0x01, 1, 0xFF, 0x2E, 3),
+            (0x02, 0, 0, 0x07, 1, 0xFF, 0x2D, 3),
+            (0x03, 0, 0, 0x03, 1, 0xFF, 0x2C, 3),
+            (0x04, 0, 0, 0x1E, 1, 0xFF, 0x2B, 3),
+            (0x05, 0, 0, 0x16, 1, 0xFF, 0x2D, 3),
+            (0x0E, 0, 5, 0x03, 0, 0x00, 0x2C, 7),
+            (0x0F, 0, 5, 0x07, 0, 0x00, 0x2F, 3),
+            (0x10, 0, 5, 0x08, 0, 0x00, 0x2D, 3),
+            (0x11, 0, 5, 0x0A, 0, 0x00, 0x2C, 3),
+            (0x12, 0, 5, 0x01, 0, 0x00, 0x2B, 3),
+            (0x19, 0, 3, 0x01, 1, 0x01, 0x2C, 7),
+            (0x1A, 0, 3, 0x0D, 0, 0x01, 0x28, 3),
+            (0x1B, 0, 3, 0x12, 0, 0x01, 0x00, 1),
+            (0x2B, 5, 5, 0x03, 0, 0x00, 0x20, 7),
+            (0x2C, 5, 5, 0x07, 0, 0x00, 0x21, 3),
+            (0x2D, 5, 5, 0x08, 0, 0x00, 0x21, 3),
+            (0x2E, 5, 5, 0x0A, 0, 0x00, 0x21, 3),
+            (0x2F, 5, 5, 0x01, 0, 0x00, 0x21, 3),
+            (0x31, 5, 3, 0x01, 1, 0x01, 0x25, 7),
+            (0x32, 5, 3, 0x0D, 0, 0x01, 0x22, 3),
+        ]
+        self.assertArrUnpacked(
+            GNSSSatelliteStatuses,
+            GNSSSatelliteStatus,
+            packed_data,
+            expected_data,
+            [
+                "i",
+                "i",
+                GNSSType,
+                "i",
+                SattelliteStatusIndicator,
+                "i",
+                "i",
+                SattelliteChannelStatusIndicator,
+            ],
+            version=1,
+            iod=7,
         )
