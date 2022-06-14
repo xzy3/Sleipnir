@@ -581,8 +581,8 @@ class BasePositionMode(IntEnum):
 simple_message("QueryBasePosition", 0x23)
 
 
-@message(0x22, 0x8B, message_length=30, input_message_length=31)
-class ConfigureBasePosition:
+@message(0x22, direction=MessageDirection.INPUT, message_length=30)
+class ConfigureBasePositionInput:
     base_position_mode = ENUM(BasePositionMode)
     survey_length = UINT32()
     standard_deviation = UINT32()
@@ -590,6 +590,17 @@ class ConfigureBasePosition:
     longitude = DPFP()
     ellipsoidal_height = SPFP()
     persist = PERSIST()
+
+@message(0x8B, direction=MessageDirection.OUTPUT, message_length=35)
+class ConfigureBasePositionOutput:
+    base_position_mode = ENUM(BasePositionMode)
+    survey_length = UINT32()
+    standard_deviation = UINT32()
+    latitude = DPFP()
+    longitude = DPFP()
+    ellipsoidal_height = SPFP()
+    runtime_base_position_mode = ENUM(BasePositionMode)
+    runtime_survey_length = UINT32()
 
 
 @message(0x30, direction=MessageDirection.INPUT, message_length=2)
@@ -605,7 +616,7 @@ class GPSEphemeris:
     eph_data_subframe3 = BYTES(28)
 
 
-@message(0x58, direction=MessageDirection.INPUT, message_length=2)
+@message(0x5B, direction=MessageDirection.INPUT, message_length=2)
 class GetGLONASSEphemeris:
     satellite_number = UINT8()
 
