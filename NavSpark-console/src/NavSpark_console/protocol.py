@@ -1,7 +1,7 @@
 import asyncio
 from operator import xor
 from enum import IntEnum, Enum, auto, Flag, IntFlag
-from functools import partial, reduce
+from functools import partial, partialmethod, reduce
 from pprint import pprint
 from io import BytesIO
 
@@ -215,18 +215,18 @@ class EnableSetting(IntEnum):
     enable = 1
 
 
-def ENABELED(**kwargs):
+def ENABLED(**kwargs):
     return message_type(
         ">u8", EnableSetting, converter=lambda v: EnableSetting(int(v)), **kwargs
     )
 
 
-def pack_message_(compiled_struct_format, self):
+def pack_message_(self, compiled_struct_format):
     return compiled_struct_format.pack(
         attr.asdict(
             self,
-            filter=lambda att, val: att.metadata["NavSparkConsole"]["Direction"]
-            & Direction.INPUT,
+            filter=lambda att, val: att.metadata["NavSpark_console"]["direction"]
+            & MessageDirection.INPUT,
         )
     )
 
@@ -241,6 +241,7 @@ def message(
     direction=MessageDirection.BOTH,
     message_length=None,
     input_message_length=None,
+    periodic=False,
 ):
     if direction is MessageDirection.BOTH and len(msg_ids) != 2:
         raise ValueError("Message direction both requires two ids be given")
@@ -307,8 +308,8 @@ def message(
                     f"input message {cls.__name__} not the expected length {actual_length} expected {expected_length}"
                 )
 
-            cls.__bytes__ = partial(
-                pack_message_, bitstruct.compile(struct_format), pack_format.keys()
+            cls.__bytes__ = partialmethod(
+                pack_message_, bitstruct.compile(struct_format, names=list(pack_format))
             )
 
         if direction & MessageDirection.OUTPUT:
@@ -340,6 +341,7 @@ def message(
             c = attr.s(slots=True, frozen=True, field_transformer=update_message_attrs)(
                 cls
             )
+            c.periodic = periodic
             for i in msg_ids:
                 MESSAGES_[i] = c
             return c
@@ -351,7 +353,7 @@ def message(
     return decorator
 
 
-def arr_message(msg_id, sub_message_cls, *, message_length=None):
+def arr_message(msg_id, sub_message_cls, *, message_length=None, periodic=False):
     def update_message_attrs(cls, fields):
         results = []
         results.append(
@@ -460,6 +462,7 @@ def arr_message(msg_id, sub_message_cls, *, message_length=None):
                 cls
             )
             MESSAGES_[msg_id] = c
+            c.periodic = periodic
             return c
         except bitstruct.Error as ex:
             raise Exception(
@@ -485,7 +488,7 @@ class MessageType(IntEnum):
 
 @message(0x9, direction=MessageDirection.INPUT, message_length=3)
 class ConfigureMessageType:
-    type = ENUM(MessageType)
+    msg_type = ENUM(MessageType)
     persist = PERSIST()
 
 
@@ -502,7 +505,7 @@ class UpdateRate(IntEnum):
     r50Hz = 50
 
 
-simple_message("QueryPositionUpdateRate", 0x10)
+QueryPositionUpdateRate = simple_message("QueryPositionUpdateRate", 0x10)
 
 
 @message(0xE, 0x86, message_length=2, input_message_length=3)
@@ -521,7 +524,7 @@ class BinaryUpdateRate(IntEnum):
     r8Hz = 6
 
 
-class SubframeEnabeledFlag(IntFlag):
+class SubframeEnabledFlag(IntFlag):
     gps = 0b1
     glonass = 0b10
     galileo = 0b100
@@ -534,30 +537,38 @@ simple_message("QueryBinaryMeasurementDataOutputStatus", 0x1F)
 @message(0x1E, 0x89, message_length=8, input_message_length=9)
 class ConfigureBinaryMeasurmentDataOutput:
     output_rate = ENUM(BinaryUpdateRate)
-    measure_time = ENABELED()
-    raw_measuremnt = ENABELED()
-    save_channel_status = ENABELED()
-    receive_state = ENABELED()
-    subframe_enabeled = ENUM(SubframeEnabeledFlag)
-    extended_raw_measurment_enabeled = ENABELED()
+    measure_time = ENABLED()
+    raw_measurement = ENABLED()
+    save_channel_status = ENABLED()
+    receive_state_enabled = ENABLED()
+    subframe_enabled = ENUM(SubframeEnabledFlag)
+    extended_raw_measurement_enabled = ENABLED()
     persist = PERSIST()
 
 
 simple_message("QueryBinaryRTCMDataOutputStatus", 0x21)
 
+class RTCMType(IntEnum):
+    MSM7 = 0
+    MSM4 = 1
 
 @message(0x20, 0x8A, message_length=16, input_message_length=17)
 class BinaryRTCMDataOutput:
-    rtcm_output = ENABELED()
+    rtcm_output = ENABLED()
     output_rate = ENUM(BinaryUpdateRate)
-    stationary_rtk = ENABELED()
-    gps_msm7 = ENABELED()
-    glonass_msm7 = ENABELED()
-    reserved0 = UINT8()
-    sbas_msm7 = ENABELED()
-    qzss_msm7 = ENABELED()
-    bds_msm7 = ENABELED()
-    reserved = BYTES(6)
+    stationary_rtk = ENABLED()
+    gps_msm7 = ENABLED()
+    glonass_msm7 = ENABLED()
+    galileo_msm7 = ENABLED()
+    sbas_msm7 = ENABLED()
+    qzss_msm7 = ENABLED()
+    bds_msm7 = ENABLED()
+    gps_ephemeris_interval = UINT8()
+    glonass_ephemeris_interval = UINT8()
+    beidou_ephemeris_interval = UINT8()
+    galileo_ephemeris_interval = UINT8()
+    rtcm_type = ENUM(RTCMType)
+    version = UINT8()
     persist = PERSIST()
 
 
@@ -634,7 +645,7 @@ class NackRequest:
     nack_id = UINT8()
 
 
-@message(0xDC, direction=MessageDirection.OUTPUT, message_length=10)
+@message(0xDC, direction=MessageDirection.OUTPUT, message_length=10, periodic=True)
 class MeasurementTimeInformation:
     iod = UINT8()
     receiver_wn = UINT16()
@@ -650,7 +661,7 @@ class NavigationState(IntEnum):
     FIX_DIFFERENTIAL = 4
 
 
-@message(0xDF, direction=MessageDirection.OUTPUT)
+@message(0xDF, direction=MessageDirection.OUTPUT, periodic=True)
 class ReceiverNavigationStatus:
     iod = UINT8()
     navigation_state = ENUM(NavigationState)
@@ -671,28 +682,28 @@ class ReceiverNavigationStatus:
     tdop = SPFP()
 
 
-@message(0xE0, direction=MessageDirection.OUTPUT, message_length=33)
+@message(0xE0, direction=MessageDirection.OUTPUT, message_length=33, periodic=True)
 class GPSSubframe:
     svid = UINT8()
     sfid = UINT8()
     words = BYTES(30)
 
 
-@message(0xE1, direction=MessageDirection.OUTPUT, message_length=12)
+@message(0xE1, direction=MessageDirection.OUTPUT, message_length=12, periodic=True)
 class GLONASSString:
     svid = UINT8()
     string_number = UINT8()
     words = BYTES(9)
 
 
-@message(0xE2, direction=MessageDirection.OUTPUT, message_length=31)
+@message(0xE2, direction=MessageDirection.OUTPUT, message_length=31, periodic=True)
 class Beidou2D1Subframe:
     svid = UINT8()
     sfid = UINT8()
     words = BYTES(28)
 
 
-@message(0xE3, direction=MessageDirection.OUTPUT, message_length=31)
+@message(0xE3, direction=MessageDirection.OUTPUT, message_length=31, periodic=True)
 class Beidou2D2Subframe:
     svid = UINT8()
     sfid = UINT8()
@@ -717,7 +728,7 @@ class RawMeasurement:
     measurement_indicator = ENUM(GPSRawMeasurementIndicator)
 
 
-@arr_message(0xDD, RawMeasurement, message_length=3)
+@arr_message(0xDD, RawMeasurement, message_length=3, periodic=True)
 class RawMeasurementsArray:
     iod = UINT8()
 
@@ -749,7 +760,7 @@ class SattelliteChannelStatus:
     channel_status_indicator = ENUM(SattelliteChannelStatusIndicator)
 
 
-@arr_message(0xDE, SattelliteChannelStatus, message_length=3)
+@arr_message(0xDE, SattelliteChannelStatus, message_length=3, periodic=True)
 class SattelliteChannelStatuses:
     iod = UINT8()
 
@@ -797,7 +808,7 @@ class MeasurementIndicatorFlags(IntFlag):
     receiver_decrement = 0b100
 
 
-@arr_message(0xE5, ExtendedRawMeasurement, message_length=14)
+@arr_message(0xE5, ExtendedRawMeasurement, message_length=14, periodic=True)
 class ExtendedRawMeasurements:
     version = UINT8()
     iod = UINT8()

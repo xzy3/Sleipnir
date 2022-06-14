@@ -2,14 +2,9 @@ import unittest
 import struct
 import asyncio
 
+import attrs
+
 from NavSpark_console.protocol import *
-
-
-def conv(x):
-    if len(x) == 8:
-        return struct.unpack(">d", x)[0]
-
-    return struct.unpack(">f", x)[0]
 
 
 class TestNavSparkRawProtocol(unittest.IsolatedAsyncioTestCase):
@@ -70,46 +65,178 @@ class TestNavSparkRawProtocol(unittest.IsolatedAsyncioTestCase):
         )
 
 
-class TestMeasurementTimeInformation(unittest.TestCase):
+class MessageTestCase(unittest.TestCase):
+    @staticmethod
+    def convert(array_types, *args, **kwargs):
+        assert not (args and kwargs)
+
+        def c(t, d):
+            if t == "i":
+                return d
+            elif t == "f" and len(d) == 4:
+                return struct.unpack(">f", d)[0]
+            elif t == "d" and len(d) == 8:
+                return struct.unpack(">d", d)[0]
+            elif t == "b":
+                return d
+            else:
+                return t(d)
+
+        if args:
+            return tuple(c(t, d) for t, d in zip(array_types, args))
+
+        if kwargs:
+            return {k: c(t, d) for t, (k, d) in zip(array_types, kwargs.items())}
+
+    def assertPacked(self, message_kls, packed_bytes, **kwargs):
+        self.assertEqual(packed_bytes, bytes(message_kls(**kwargs)))
+
+    def assertUnpacked(self, message_kls, packed_bytes, kw_types=None, **kwargs):
+        msg = message_kls.unpack(packed_bytes)
+        expected = kwargs
+        if kw_types:
+            expected = MessageTestCase.convert(kw_types, **kwargs)
+
+        self.assertEqual(msg, message_kls(**expected))
+
+    def assertArrUnpacked(
+        self,
+        message_kls,
+        sub_message_kls,
+        packed_bytes,
+        sub_array,
+        array_types,
+        **kwargs,
+    ):
+
+        msg = message_kls.unpack(packed_bytes)
+        actual_dict = attr.asdict(msg)
+        actual_dict.pop("sub_messages")
+        actual_dict.pop("output_id")
+
+        expected_dict = dict(kwargs)
+        expected_dict["array_count"] = len(sub_array)
+
+        self.assertDictEqual(actual_dict, expected_dict)
+
+        for i, (actual, expected) in enumerate(zip(msg.sub_messages, sub_array)):
+            expected_conv = MessageTestCase.convert(array_types, *expected)
+            self.assertEqual(
+                actual, sub_message_kls(*expected_conv), msg=f"Array item {i} differs"
+            )
+
+
+class TestConfigureMessageType(MessageTestCase):
+    def test_pack(self):
+        self.assertPacked(
+            ConfigureMessageType, b"\x09\x00\x00", msg_type=MessageType(0), persist=0
+        )
+
+
+class TestConfigurePositionUpdateRate(MessageTestCase):
+    def test_pack(self):
+        self.assertPacked(
+            ConfigurePositionUpdateRate,
+            b"\x0E\x01\x00",
+            update_rate=UpdateRate.r1Hz,
+            persist=0,
+        )
+
     def test_unpack(self):
-        msg = MeasurementTimeInformation.unpack(
-            b"\xDC\x3D\x06\xED\x0B\x0C\xBC\x40\x03\xE8"
-        )
-
-        self.assertEqual(
-            msg,
-            MeasurementTimeInformation(
-                iod=0x3D,
-                receiver_wn=0x06ED,
-                receiver_tow=0x0B0CBC40,
-                measurement_period=0x03E8,
-            ),
+        self.assertUnpacked(
+            ConfigurePositionUpdateRate,
+            b"\x86\x01",
+            update_rate=UpdateRate.r1Hz,
         )
 
 
-class TestRawMeasurementsArray(unittest.TestCase):
+class TestConfigureBinaryMeasurmentDataOutput(MessageTestCase):
+    def test_pack(self):
+        self.assertPacked(
+            ConfigureBinaryMeasurmentDataOutput,
+            b"\x1E\x00\x00\x00\x00\x01\x03\x01\x01",
+            output_rate=BinaryUpdateRate.r1Hz,
+            measure_time=False,
+            raw_measurement=False,
+            save_channel_status=False,
+            receive_state_enabled=True,
+            subframe_enabled=SubframeEnabledFlag(0x3),
+            extended_raw_measurement_enabled=True,
+            persist=True,
+        )
+
     def test_unpack(self):
-        msg = RawMeasurementsArray.unpack(
-            b"\xDD\x3D\x0F\x02\x2B\x41\x74\x42\xDB\x76\x55\xFA\x29\xC0\xE2\xE4\x02\x21\x5A\x00\x00"
-            b"\x44\x20\x80\x00\x07\x09\x29\x41\x77\x8C\xF0\xA9\xE7\x0C\x43\xC0\xF9\x72\x54\x2E\xEB"
-            b"\x80\x00\x44\xE3\xA0\x00\x07\x0A\x28\x41\x75\xCA\x96\x91\xA9\xE9\x23\x41\x04\x7D\xB1"
-            b"\xE9\xA9\x80\x00\xC5\x31\x20\x00\x07\x05\x2B\x41\x74\x9E\xBE\xEE\x17\x8C\x6A\x40\xD3"
-            b"\x71\xD4\x80\xCF\x00\x00\xC3\xAE\x00\x00\x07\x1A\x2E\x41\x75\x02\x83\xE5\xEC\xD7\x65"
-            b"\xC1\x04\x6D\x73\xBD\xE6\x20\x00\x45\x33\x30\x00\x07\x0C\x28\x41\x77\xC1\xE0\x1D\xA7"
-            b"\x2E\xC1\x40\xFF\x79\x4C\xC9\x14\x80\x00\xC5\x0D\x80\x00\x07\x11\x28\x41\x77\xE7\xB0"
-            b"\xE8\x15\x9A\xA8\x41\x0C\x87\x99\x0C\xFA\xA0\x00\xC5\x80\xD8\x00\x07\x0F\x27\x41\x77"
-            b"\x93\x96\x77\x03\x2B\x0A\xC1\x06\xBF\x2C\x49\x05\x60\x00\x45\x4F\xB0\x00\x07\x04\x2C"
-            b"\x41\x75\xBA\x4E\xB0\x68\x2B\x43\x40\xFB\x25\xC7\xA3\xB6\xC0\x00\xC4\xFE\x60\x00\x07"
-            b"\x07\x26\x41\x78\x48\x7F\x72\xDF\xC5\x81\xC0\xD0\x89\xC8\xBF\x96\x00\x00\x43\xA7\x80"
-            b"\x00\x07\x0D\x1D\x00\x00\x00\x00\x00\x00\x00\x00\x41\x05\xF9\xA2\xD6\x0D\x40\x00\xC5"
-            b"\x66\x00\x00\x16\x08\x27\x41\x78\x6A\xD7\xA4\x71\x2A\x50\xC0\xEF\x02\x44\x2E\x09\x80"
-            b"\x00\x44\xA2\x80\x00\x07\x19\x23\x41\x78\x7E\xE4\x8B\x0C\x9E\x26\x40\xE6\xAD\x04\x2B"
-            b"\x85\x80\x00\xC4\x98\x20\x00\x07\x42\x1F\x41\x75\x27\xEA\xE2\x16\x7D\x10\x41\x06\xD6"
-            b"\x0A\x57\x6B\x00\x00\xC5\x53\x10\x00\x07\x52\x1E\x00\x00\x00\x00\x00\x00\x00\x00\xC0"
-            b"\xFE\x83\x49\x5D\xA7\x00\x00\x45\x16\xC0\x00\x06"
+        self.assertUnpacked(
+            ConfigureBinaryMeasurmentDataOutput,
+            b"\x89\x00\x00\x00\x01\x01\x03\x01",
+            output_rate=BinaryUpdateRate.r1Hz,
+            measure_time=False,
+            raw_measurement=False,
+            save_channel_status=True,
+            receive_state_enabled=True,
+            subframe_enabled=SubframeEnabledFlag(0x3),
+            extended_raw_measurement_enabled=True,
         )
 
-        expected_data = [
+class TestBinaryRTCMDataOutput(MessageTestCase):
+    def test_unpack(self):
+        self.assertUnpacked(
+            BinaryRTCMDataOutput,
+            b"\x8A\x01\x00\x01\x01\x01\x00\x01\x01\x00\x00\x00\x00\x00\x01\x02",
+            rtcm_output=True,
+            output_rate=BinaryUpdateRate.r1Hz,
+            stationary_rtk=True,
+            gps_msm7=True,
+            glonass_msm7=True,
+            galileo_msm7=False,
+            sbas_msm7=True,
+            qzss_msm7=True,
+            bds_msm7=False,
+            gps_ephemeris_interval=0,
+            glonass_ephemeris_interval=0,
+            beidou_ephemeris_interval=0,
+            galileo_ephemeris_interval=0,
+            rtcm_type=RTCMType.MSM4,
+            version=2,
+        )
+
+    def test_pack(self):
+        self.assertPacked(
+            BinaryRTCMDataOutput,
+            b"\x20\x01\x00\x01\x01\x01\x00\x01\x01\x00\x00\x00\x00\x00\x00\x02\x01",
+            rtcm_output=True,
+            output_rate=BinaryUpdateRate.r1Hz,
+            stationary_rtk=True,
+            gps_msm7=True,
+            glonass_msm7=True,
+            galileo_msm7=False,
+            sbas_msm7=True,
+            qzss_msm7=True,
+            bds_msm7=False,
+            gps_ephemeris_interval=0,
+            glonass_ephemeris_interval=0,
+            beidou_ephemeris_interval=0,
+            galileo_ephemeris_interval=0,
+            rtcm_type=RTCMType.MSM7,
+            version=2,
+            persist=True
+        )
+
+class TestMeasurementTimeInformation(MessageTestCase):
+    def test_unpack(self):
+        self.assertUnpacked(
+            MeasurementTimeInformation,
+            b"\xDC\x3D\x06\xED\x0B\x0C\xBC\x40\x03\xE8",
+            iod=0x3D,
+            receiver_wn=0x06ED,
+            receiver_tow=0x0B0CBC40,
+            measurement_period=0x03E8,
+        )
+
+
+class TestRawMeasurementsArray(MessageTestCase):
+    def test_unpack(self):
+        expected_array_data = [
             (
                 0x02,
                 0x2B,
@@ -231,30 +358,39 @@ class TestRawMeasurementsArray(unittest.TestCase):
                 0x06,
             ),
         ]
+        packed_data = (
+            b"\xDD\x3D\x0F\x02\x2B\x41\x74\x42\xDB\x76\x55\xFA\x29\xC0\xE2\xE4\x02\x21\x5A\x00\x00"
+            b"\x44\x20\x80\x00\x07\x09\x29\x41\x77\x8C\xF0\xA9\xE7\x0C\x43\xC0\xF9\x72\x54\x2E\xEB"
+            b"\x80\x00\x44\xE3\xA0\x00\x07\x0A\x28\x41\x75\xCA\x96\x91\xA9\xE9\x23\x41\x04\x7D\xB1"
+            b"\xE9\xA9\x80\x00\xC5\x31\x20\x00\x07\x05\x2B\x41\x74\x9E\xBE\xEE\x17\x8C\x6A\x40\xD3"
+            b"\x71\xD4\x80\xCF\x00\x00\xC3\xAE\x00\x00\x07\x1A\x2E\x41\x75\x02\x83\xE5\xEC\xD7\x65"
+            b"\xC1\x04\x6D\x73\xBD\xE6\x20\x00\x45\x33\x30\x00\x07\x0C\x28\x41\x77\xC1\xE0\x1D\xA7"
+            b"\x2E\xC1\x40\xFF\x79\x4C\xC9\x14\x80\x00\xC5\x0D\x80\x00\x07\x11\x28\x41\x77\xE7\xB0"
+            b"\xE8\x15\x9A\xA8\x41\x0C\x87\x99\x0C\xFA\xA0\x00\xC5\x80\xD8\x00\x07\x0F\x27\x41\x77"
+            b"\x93\x96\x77\x03\x2B\x0A\xC1\x06\xBF\x2C\x49\x05\x60\x00\x45\x4F\xB0\x00\x07\x04\x2C"
+            b"\x41\x75\xBA\x4E\xB0\x68\x2B\x43\x40\xFB\x25\xC7\xA3\xB6\xC0\x00\xC4\xFE\x60\x00\x07"
+            b"\x07\x26\x41\x78\x48\x7F\x72\xDF\xC5\x81\xC0\xD0\x89\xC8\xBF\x96\x00\x00\x43\xA7\x80"
+            b"\x00\x07\x0D\x1D\x00\x00\x00\x00\x00\x00\x00\x00\x41\x05\xF9\xA2\xD6\x0D\x40\x00\xC5"
+            b"\x66\x00\x00\x16\x08\x27\x41\x78\x6A\xD7\xA4\x71\x2A\x50\xC0\xEF\x02\x44\x2E\x09\x80"
+            b"\x00\x44\xA2\x80\x00\x07\x19\x23\x41\x78\x7E\xE4\x8B\x0C\x9E\x26\x40\xE6\xAD\x04\x2B"
+            b"\x85\x80\x00\xC4\x98\x20\x00\x07\x42\x1F\x41\x75\x27\xEA\xE2\x16\x7D\x10\x41\x06\xD6"
+            b"\x0A\x57\x6B\x00\x00\xC5\x53\x10\x00\x07\x52\x1E\x00\x00\x00\x00\x00\x00\x00\x00\xC0"
+            b"\xFE\x83\x49\x5D\xA7\x00\x00\x45\x16\xC0\x00\x06"
+        )
 
-        self.assertEqual(msg.iod, 0x3D)
-        self.assertEqual(msg.array_count, 0xF)
-        self.assertEqual(msg.array_count, len(msg.sub_messages))
-
-        self.assertListEqual(
-            msg.sub_messages,
-            [
-                RawMeasurement(
-                    svid=data[0],
-                    cn0=data[1],
-                    pseudo_range=conv(data[2]),
-                    accumulated_carrier_cycle=conv(data[3]),
-                    doppler_frequency=conv(data[4]),
-                    measurement_indicator=GPSRawMeasurementIndicator(data[5]),
-                )
-                for data in expected_data
-            ],
+        self.assertArrUnpacked(
+            RawMeasurementsArray,
+            RawMeasurement,
+            packed_data,
+            expected_array_data,
+            "iiddfi",
+            iod=0x3D,
         )
 
 
-class TestSattelliteChannelStatuses(unittest.TestCase):
+class TestSattelliteChannelStatuses(MessageTestCase):
     def test_unpack(self):
-        msg = SattelliteChannelStatuses.unpack(
+        packed_data = (
             b"\xDE\x3D\x10\x00\x02\x07\x01\x2B\x00\x3E\x00\x10\x1F\x01\x09\x07\x01\x29\x00\x10\x00"
             b"\x72\x1F\x02\x0A\x07\x01\x28\x00\x22\x00\x27\x1F\x03\x05\x07\x00\x2B\x00\x38\x01\x38"
             b"\x1F\x04\x1A\x07\x00\x2E\x00\x2E\x00\xBA\x1F\x05\x0C\x07\x00\x28\x00\x0E\x00\xF8\x1F"
@@ -265,7 +401,7 @@ class TestSattelliteChannelStatuses(unittest.TestCase):
             b"\x1F\x00\x20\x00\x15\x1F\x11\x52\x07\x05\x1E\x00\x31\x01\x4E\x1F"
         )
 
-        expected_data = [
+        expected_array_data = [
             (0x00, 0x02, 0x07, 0x01, 0x2B, 0x003E, 0x0010, 0x1F),
             (0x01, 0x09, 0x07, 0x01, 0x29, 0x0010, 0x0072, 0x1F),
             (0x02, 0x0A, 0x07, 0x01, 0x28, 0x0022, 0x0027, 0x1F),
@@ -284,141 +420,150 @@ class TestSattelliteChannelStatuses(unittest.TestCase):
             (0x11, 0x52, 0x07, 0x05, 0x1E, 0x0031, 0x014E, 0x1F),
         ]
 
-        self.assertEqual(msg.iod, 0x3D)
-        self.assertEqual(msg.array_count, 0x10)
-        self.assertEqual(msg.array_count, len(msg.sub_messages))
-
-        self.assertListEqual(
-            msg.sub_messages,
+        self.assertArrUnpacked(
+            SattelliteChannelStatuses,
+            SattelliteChannelStatus,
+            packed_data,
+            expected_array_data,
             [
-                SattelliteChannelStatus(
-                    channel_id=data[0],
-                    svid=data[1],
-                    sv_status_indicator=SattelliteStatusIndicator(data[2]),
-                    ura_ft=data[3],
-                    cn0=data[4],
-                    elevation=data[5],
-                    azimuth=data[6],
-                    channel_status_indicator=SattelliteChannelStatusIndicator(data[7]),
-                )
-                for data in expected_data
+                "i",
+                "i",
+                SattelliteStatusIndicator,
+                "i",
+                "i",
+                "i",
+                "i",
+                SattelliteChannelStatusIndicator,
             ],
+            iod=0x3D,
         )
 
 
-class TestReceiverNavigationStatus(unittest.TestCase):
+class TestReceiverNavigationStatus(MessageTestCase):
     def test_unpack(self):
         # the example message from the reference doc has a typo in this message. The clock bias field
         # ends in 0x78 in the packed message but 0x68 in the message table. I just went with the 0x68
         # version
-        msg = ReceiverNavigationStatus.unpack(
+        packed_data = (
             b"\xDF\x92\x03\x06\xED\x41\x07\xDB\xE7\xFD\x76\x3B\x21\xC1\x46\xC6\x04\x2F\x62\xBF\xD8"
             b"\x41\x52\xF1\xB6\x4B\x17\xF7\xCC\x41\x44\x46\x79\xB8\x7A\xDB\x12\x3C\x8A\xAA\xD4\xBC"
             b"\x1A\x6E\xF0\xBB\xC5\x67\xD2\x41\x16\xAD\x5E\x6D\x3F\x7C\x78\x42\x8F\xD9\x1E\x40\x5D"
             b"\x7C\x6B\x40\x4B\x07\xFB\x3F\x7C\x51\xAD\x40\x40\xFB\xC2\x3F\xB1\x06\x30"
         )
 
-        self.assertEqual(
-            msg,
-            ReceiverNavigationStatus(
-                iod=0x92,
-                navigation_state=NavigationState(0x03),
-                week_number=0x06ED,
-                time_of_week=conv(b"\x41\x07\xDB\xE7\xFD\x76\x3B\x21"),
-                ecef_x=conv(b"\xC1\x46\xC6\x04\x2F\x62\xBF\xD8"),
-                ecef_y=conv(b"\x41\x52\xF1\xB6\x4B\x17\xF7\xCC"),
-                ecef_z=conv(b"\x41\x44\x46\x79\xB8\x7A\xDB\x12"),
-                ecef_x_vel=conv(b"\x3C\x8A\xAA\xD4"),
-                ecef_y_vel=conv(b"\xBC\x1A\x6E\xF0"),
-                ecef_z_vel=conv(b"\xBB\xC5\x67\xD2"),
-                clock_bias=conv(b"\x41\x16\xAD\x5E\x6D\x3F\x7C\x78"),
-                clock_drift=conv(b"\x42\x8F\xD9\x1E"),
-                gdop=conv(b"\x40\x5D\x7C\x6B"),
-                pdop=conv(b"\x40\x4B\x07\xFB"),
-                hdop=conv(b"\x3F\x7C\x51\xAD"),
-                vdop=conv(b"\x40\x40\xFB\xC2"),
-                tdop=conv(b"\x3F\xB1\x06\x30"),
-            ),
+        self.assertUnpacked(
+            ReceiverNavigationStatus,
+            packed_data,
+            kw_types=[
+                "i",
+                NavigationState,
+                "i",
+                "d",
+                "d",
+                "d",
+                "d",
+                "f",
+                "f",
+                "f",
+                "d",
+                "f",
+                "f",
+                "f",
+                "f",
+                "f",
+                "f",
+            ],
+            iod=0x92,
+            navigation_state=0x03,
+            week_number=0x06ED,
+            time_of_week=b"\x41\x07\xDB\xE7\xFD\x76\x3B\x21",
+            ecef_x=b"\xC1\x46\xC6\x04\x2F\x62\xBF\xD8",
+            ecef_y=b"\x41\x52\xF1\xB6\x4B\x17\xF7\xCC",
+            ecef_z=b"\x41\x44\x46\x79\xB8\x7A\xDB\x12",
+            ecef_x_vel=b"\x3C\x8A\xAA\xD4",
+            ecef_y_vel=b"\xBC\x1A\x6E\xF0",
+            ecef_z_vel=b"\xBB\xC5\x67\xD2",
+            clock_bias=b"\x41\x16\xAD\x5E\x6D\x3F\x7C\x78",
+            clock_drift=b"\x42\x8F\xD9\x1E",
+            gdop=b"\x40\x5D\x7C\x6B",
+            pdop=b"\x40\x4B\x07\xFB",
+            hdop=b"\x3F\x7C\x51\xAD",
+            vdop=b"\x40\x40\xFB\xC2",
+            tdop=b"\x3F\xB1\x06\x30",
         )
 
 
-class TestGPSSubframe(unittest.TestCase):
+class TestGPSSubframe(MessageTestCase):
     def test_unpack(self):
-        msg = GPSSubframe.unpack(
+        packed_data = (
             b"\xE0\x02\x05\x8B\x0B\xB4\x3F\x22\xB5\x4F\x31\xCF\x4E\xFD\x81\xFD\x4D\x00\xA1\x0C"
             b"\x98\x79\xE7\x09\x08\xD5\xC5\xF8\xED\x03\xEB\xFF\xF4"
         )
 
-        self.assertEqual(
-            msg,
-            GPSSubframe(
-                svid=0x02,
-                sfid=0x05,
-                words=(
-                    b"\x8B\x0B\xB4\x3F\x22\xB5\x4F\x31\xCF\x4E\xFD\x81\xFD\x4D\x00\xA1\x0C"
-                    b"\x98\x79\xE7\x09\x08\xD5\xC5\xF8\xED\x03\xEB\xFF\xF4"
-                ),
+        self.assertUnpacked(
+            GPSSubframe,
+            packed_data,
+            svid=0x02,
+            sfid=0x05,
+            words=(
+                b"\x8B\x0B\xB4\x3F\x22\xB5\x4F\x31\xCF\x4E\xFD\x81\xFD\x4D\x00\xA1\x0C\x98\x79"
+                b"\xE7\x09\x08\xD5\xC5\xF8\xED\x03\xEB\xFF\xF4"
             ),
         )
 
 
-class TestGLONASSString(unittest.TestCase):
+class TestGLONASSString(MessageTestCase):
     def test_unpack(self):
-        msg = GLONASSString.unpack(b"\xE1\x52\x0E\xB4\x05\xA9\xC3\x94\x17\x50\x04\x82")
-
-        self.assertEqual(
-            msg,
-            GLONASSString(
-                svid=0x52,
-                string_number=0x0E,
-                words=b"\xB4\x05\xA9\xC3\x94\x17\x50\x04\x82",
-            ),
+        self.assertUnpacked(
+            GLONASSString,
+            b"\xE1\x52\x0E\xB4\x05\xA9\xC3\x94\x17\x50\x04\x82",
+            svid=0x52,
+            string_number=0x0E,
+            words=b"\xB4\x05\xA9\xC3\x94\x17\x50\x04\x82",
         )
 
 
-class TestBeidou2D1Subframe(unittest.TestCase):
+class TestBeidou2D1Subframe(MessageTestCase):
     def test_unpack(self):
-        msg = Beidou2D1Subframe.unpack(
+        packed_data = (
             b"\xE2\xCF\x01\xE2\x40\x47\x37\x58\x00\x0D\xA0\xE1\x00\xAC\x03\x87\x8E\x31\x5B\x53"
             b"\xB4\x12\xB2\xC0\x02\x5B\x04\x60\x07\xAB\x81"
         )
 
-        self.assertEqual(
-            msg,
-            Beidou2D1Subframe(
-                svid=0xCF,
-                sfid=0x01,
-                words=(
-                    b"\xE2\x40\x47\x37\x58\x00\x0D\xA0\xE1\x00\xAC\x03\x87\x8E\x31\x5B\x53"
-                    b"\xB4\x12\xB2\xC0\x02\x5B\x04\x60\x07\xAB\x81"
-                ),
+        self.assertUnpacked(
+            Beidou2D1Subframe,
+            packed_data,
+            svid=0xCF,
+            sfid=0x01,
+            words=(
+                b"\xE2\x40\x47\x37\x58\x00\x0D\xA0\xE1\x00\xAC\x03\x87\x8E\x31\x5B\x53"
+                b"\xB4\x12\xB2\xC0\x02\x5B\x04\x60\x07\xAB\x81"
             ),
         )
 
 
-class TestBeidou2D2Subframe(unittest.TestCase):
+class TestBeidou2D2Subframe(MessageTestCase):
     def test_unpack(self):
-        msg = Beidou2D2Subframe.unpack(
+        packed_data = (
             b"\xE3\xCB\x01\xE2\x40\x47\x37\x95\xA5\x14\xC8\xCA\xEA\xCF\xA5\x00\x15\x55\x55\x55"
             b"\x55\x55\x55\x55\x55\x55\x55\x55\x55\x55\x55"
         )
 
-        self.assertEqual(
-            msg,
-            Beidou2D2Subframe(
-                svid=0xCB,
-                sfid=0x01,
-                words=(
-                    b"\xE2\x40\x47\x37\x95\xA5\x14\xC8\xCA\xEA\xCF\xA5\x00\x15\x55\x55\x55"
-                    b"\x55\x55\x55\x55\x55\x55\x55\x55\x55\x55\x55"
-                ),
+        self.assertUnpacked(
+            Beidou2D2Subframe,
+            packed_data,
+            svid=0xCB,
+            sfid=0x01,
+            words=(
+                b"\xE2\x40\x47\x37\x95\xA5\x14\xC8\xCA\xEA\xCF\xA5\x00\x15\x55\x55\x55"
+                b"\x55\x55\x55\x55\x55\x55\x55\x55\x55\x55\x55"
             ),
         )
 
 
-class TestExtendedRawMeasurement(unittest.TestCase):
+class TestExtendedRawMeasurement(MessageTestCase):
     def test_unpack(self):
-        msg = ExtendedRawMeasurements.unpack(
+        packed_data = (
             b"\xE5\x01\x0D\x07\x7C\x06\xAC\x40\x80\x03\xE8\x00\x00\x11\x00\x0D\xE0\x32\x41\xB3"
             b"\x33\x99\x89\x62\xC9\xBA\x41\xB3\x7F\x98\xFD\xAD\xE0\x00\x45\x79\x40\x00\x00\x00"
             b"\x00\x40\x07\x00\x00\x00\x02\xE0\x31\x41\xB3\x22\x3E\xED\xEA\xFB\xD6\x41\xB3\xB3"
@@ -454,8 +599,8 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 0,
                 0,
                 0xD,
-                0,
                 0xE,
+                0,
                 0x32,
                 b"\x41\xB3\x33\x99\x89\x62\xC9\xBA",
                 b"\x41\xB3\x7F\x98\xFD\xAD\xE0\x00",
@@ -470,8 +615,8 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 0,
                 0,
                 0x2,
-                0,
                 0xE,
+                0,
                 0x31,
                 b"\x41\xB3\x22\x3E\xED\xEA\xFB\xD6",
                 b"\x41\xB3\xB3\xB8\x3A\xEB\xA0\x00",
@@ -486,8 +631,8 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 0,
                 0,
                 0x6,
-                0,
                 0xE,
+                0,
                 0x30,
                 b"\x41\xB3\x31\xEE\x4F\x2D\x2C\xD9",
                 b"\x41\xB3\xE3\x77\x47\x15\x20\x00",
@@ -502,8 +647,8 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 0,
                 0,
                 0x4,
-                0,
                 0xE,
+                0,
                 0x33,
                 b"\x41\xB3\x21\xA6\x72\x9C\x9E\x8D",
                 b"\x41\xB3\x97\x3F\x77\x2B\x60\x00",
@@ -518,8 +663,8 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 0,
                 0,
                 0x5,
-                0,
                 0xE,
+                0,
                 0x31,
                 b"\x41\xB3\x24\x52\x84\x6C\x89\x0E",
                 b"\x41\xB3\xC4\xEF\x07\xA8\xE0\x00",
@@ -534,8 +679,8 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 0,
                 0,
                 0x0C,
-                0,
                 0xE,
+                0,
                 0x29,
                 b"\x41\xB3\x55\xD6\xAE\x07\x64\xC5",
                 b"\x41\xB3\xF5\x9A\xF1\xB5\xE0\x00",
@@ -550,8 +695,8 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 0,
                 0,
                 0x14,
-                0,
                 0xE,
+                0,
                 0x29,
                 b"\x41\xB3\x53\x25\x16\x98\x94\x03",
                 b"\x41\xB3\x99\xD7\x19\x9B\x60\x00",
@@ -566,8 +711,8 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 0,
                 0,
                 0x13,
-                0,
                 0xE,
+                0,
                 0x2C,
                 b"\x41\xB3\x48\x02\x4B\x63\xBF\xD0",
                 b"\x41\xB4\x15\x80\x1A\xC7\x60\x00",
@@ -579,11 +724,11 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 b"\x00\x00",
             ),
             (
+                0,
                 0x4,
-                0,
                 0xC1,
-                0,
                 0xE,
+                0,
                 0x30,
                 b"\x41\xB4\x3D\x68\x15\x86\x5B\x87",
                 b"\x41\xB3\xD2\x37\xDB\x1A\x20\x00",
@@ -595,11 +740,11 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 b"\x00\x00",
             ),
             (
+                0,
                 0x1,
-                0,
                 0x80,
-                0,
                 0xC,
+                0,
                 0x2D,
                 b"\x41\xB4\x26\x6A\x74\xEB\xC0\x97",
                 b"\x41\xB3\xCC\x0C\x45\x53\xA0\x00",
@@ -611,11 +756,11 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 b"\x00\x00",
             ),
             (
+                0,
                 0x1,
-                0,
                 0x81,
-                0,
                 0xC,
+                0,
                 0x2B,
                 b"\x41\xB4\x19\xE0\xD3\xAB\x6B\xBA",
                 b"\x41\xB3\xCC\xAC\xC2\xC4\x20\x00",
@@ -627,11 +772,11 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 b"\x00\x00",
             ),
             (
-                0x2,
                 0,
+                0x2,
                 0x6,
-                0x3,
                 0xE,
+                0x3,
                 0x31,
                 b"\x41\xB3\x15\x16\x02\x23\x16\x1C",
                 b"\x41\xB4\x0A\x57\x97\x61\x20\x00",
@@ -643,11 +788,11 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 b"\x00\x00",
             ),
             (
-                0x2,
                 0,
+                0x2,
                 0x5,
-                0x8,
                 0xE,
+                0x8,
                 0x2D,
                 b"\x41\xB3\x21\xD8\x78\x41\x5F\x35",
                 b"\x41\xB4\x5E\x18\x7C\x73\xA0\x00",
@@ -659,11 +804,11 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 b"\x00\x00",
             ),
             (
-                0x2,
                 0,
+                0x2,
                 0x14,
-                0x9,
                 0xE,
+                0x9,
                 0x2D,
                 b"\x41\xB3\x0B\x52\x79\xC4\x94\x08",
                 b"\x41\xB4\x0F\xE8\x10\xA1\x60\x00",
@@ -675,11 +820,11 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 b"\x00\x00",
             ),
             (
-                0x2,
                 0,
+                0x2,
                 0x13,
-                0xA,
                 0xE,
+                0xA,
                 0x2C,
                 b"\x41\xB3\x30\x72\x52\x8C\x68\x0F",
                 b"\x41\xB4\x68\x6E\x04\xCF\xE0\x00",
@@ -691,11 +836,11 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 b"\x00\x00",
             ),
             (
-                0x2,
                 0,
+                0x2,
                 0x15,
-                0xB,
                 0xE,
+                0xB,
                 0x2F,
                 b"\x41\xB3\x2A\x46\xFD\x31\x68\x39",
                 b"\x41\xB3\xD0\x8E\xE5\x12\xE0\x00",
@@ -707,11 +852,11 @@ class TestExtendedRawMeasurement(unittest.TestCase):
                 b"\x00\x00",
             ),
             (
-                0x2,
                 0,
+                0x2,
                 0x7,
-                0xC,
                 0xE,
+                0xC,
                 0x2C,
                 b"\x41\xB3\x45\xAB\x04\x39\x61\xD6",
                 b"\x41\xB3\xE5\x52\x58\x10\x20\x00",
@@ -724,36 +869,17 @@ class TestExtendedRawMeasurement(unittest.TestCase):
             ),
         ]
 
-        self.assertEqual(msg.iod, 0x0D)
-        self.assertEqual(msg.version, 0x01)
-        self.assertEqual(msg.receiver_wn, 0x077C)
-        self.assertEqual(msg.tow, 0x06AC4080)
-        self.assertEqual(msg.measurement_period, 0x03E8)
-        self.assertEqual(msg.measurement_indicator, 0x00)
-        self.assertEqual(msg.reserved, b"\x00")
-
-        self.assertEqual(msg.array_count, 0x11)
-        self.assertEqual(msg.array_count, len(msg.sub_messages))
-
-        self.assertListEqual(
-            msg.sub_messages,
-            [
-                ExtendedRawMeasurement(
-                    gnss_type=GNSSType(data[0]),
-                    signal_type=data[1],
-                    svid=data[2],
-                    frequency_id=data[4],
-                    lock_time_indicator=data[3],
-                    cn0=data[5],
-                    pseudorange=conv(data[6]),
-                    accumulated_carrier_cycle=conv(data[7]),
-                    doppler_frequency=conv(data[8]),
-                    pseudorange_standard_dev=data[9],
-                    accumulated_carrier_cycle_standard_dev=data[10],
-                    doppler_freq_standard_dev=data[11],
-                    channel_indicator=ExtendedRawChannelIndicator(data[12]),
-                    reserved=data[13],
-                )
-                for data in expected_data
-            ],
+        self.assertArrUnpacked(
+            ExtendedRawMeasurements,
+            ExtendedRawMeasurement,
+            packed_data,
+            expected_data,
+            [GNSSType, "i", "i", "i", "i", "i", "d", "d", "f", "i", "i", "i", "i", "b"],
+            iod=0x0D,
+            version=0x01,
+            receiver_wn=0x077C,
+            tow=0x06AC4080,
+            measurement_period=0x03E8,
+            measurement_indicator=0x00,
+            reserved=b"\x00",
         )
