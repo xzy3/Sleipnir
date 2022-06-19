@@ -326,6 +326,85 @@ class TestGPSEphemeris(MessageTestCase):
             ),
         )
 
+    def test_subframe1_fields(self):
+        msg = GPSEphemeris.unpack(
+            b"\xB1\x00\x02\x00\x77\x88\x04\x61\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x00\x00\xDB\xDF\x59\xA6\x00\x00\x1E\x0A\x47\x7C\x00\x77\x88\x88\xDF\xFD\x2E"
+            b"\x35\xA9\xCD\xB0\xF0\x9F\xFD\xA7\x04\x8E\xCC\xA8\x10\x2C\xA1\x0E\x22\x31\x59"
+            b"\xA6\x74\x00\x77\x89\x0C\xFF\xA3\x59\x86\xC7\x77\xFF\xF8\x26\x97\xE3\xB9\x1C"
+            b"\x60\x59\xC3\x07\x44\xFF\xA6\x37\xDF\xF0\xB0"
+        )
+
+        self.assertDictEqual(
+            msg.subframe1_fields,
+            {
+                "sf1_how": b"\x77\x88\x04",
+                "wn": 388,
+                "ca_or_P_on_l2": 1,
+                "ura_index": 0,
+                "sv_health": 0,
+                "iodc": 0b0011011111,
+                "l2_p_data_flag": 0,
+                "t_gd": -37,
+                "t_oc": 0x59A6,
+                "a_f2": 0,
+                "a_f1": 30,
+                "a_f0": 0x291DF,
+            },
+        )
+
+    def test_subframe2_fiels(self):
+        msg = GPSEphemeris.unpack(
+            b"\xB1\x00\x02\x00\x77\x88\x04\x61\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x00\x00\xDB\xDF\x59\xA6\x00\x00\x1E\x0A\x47\x7C\x00\x77\x88\x88\xDF\xFD\x2E"
+            b"\x35\xA9\xCD\xB0\xF0\x9F\xFD\xA7\x04\x8E\xCC\xA8\x10\x2C\xA1\x0E\x22\x31\x59"
+            b"\xA6\x74\x00\x77\x89\x0C\xFF\xA3\x59\x86\xC7\x77\xFF\xF8\x26\x97\xE3\xB9\x1C"
+            b"\x60\x59\xC3\x07\x44\xFF\xA6\x37\xDF\xF0\xB0"
+        )
+
+        self.assertDictEqual(
+            msg.subframe2_fields,
+            {
+                 "how" : b"\x77\x88\x88",
+                 "iode" : 0xDF,
+                 "c_rs" : 0xFD2E,
+                 "delta_n" : 0x35A9,
+                 "M_0" : 0xCDB0F09F,
+                 "C_UC" : 0xFDA7,
+                 "e" : 0x048ECCA8,
+                 "C_us" : 0x102C,
+                 "root_a" : 0xA10E2231,
+                 "t_oe" : 0x59A6,
+                 "fit_interval_flag" : 0x0,
+                 "AODO" : 0x1D,
+            },
+        )
+
+    def test_subframe2_fiels(self):
+        msg = GPSEphemeris.unpack(
+            b"\xB1\x00\x02\x00\x77\x88\x04\x61\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x00\x00\xDB\xDF\x59\xA6\x00\x00\x1E\x0A\x47\x7C\x00\x77\x88\x88\xDF\xFD\x2E"
+            b"\x35\xA9\xCD\xB0\xF0\x9F\xFD\xA7\x04\x8E\xCC\xA8\x10\x2C\xA1\x0E\x22\x31\x59"
+            b"\xA6\x74\x00\x77\x89\x0C\xFF\xA3\x59\x86\xC7\x77\xFF\xF8\x26\x97\xE3\xB9\x1C"
+            b"\x60\x59\xC3\x07\x44\xFF\xA6\x37\xDF\xF0\xB0"
+        )
+
+        self.assertDictEqual(
+            msg.subframe3_fields,
+            {
+                "sf3_how" : b"\x77\x89\x0C",
+                "C_ic" : 0xFFA3,
+                "Omega_0" : 0x5986C777,
+                "C_is" : 0xFFF8,
+                "I_0" : 0x2697E3B9,
+                "C_rc" : 0x1C60,
+                "omega" : 0x59C30744,
+                "Omega_dot" : 0xFFA637,
+                "iode" : 0xDF,
+                "iodt" : 0xF0B0 >> 2,
+            },
+        )
+
 
 class TestGetGLONASSEphemeris(MessageTestCase):
     def test_pack(self):

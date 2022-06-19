@@ -548,9 +548,11 @@ class ConfigureBinaryMeasurmentDataOutput:
 
 simple_message("QueryBinaryRTCMDataOutputStatus", 0x21)
 
+
 class RTCMType(IntEnum):
     MSM7 = 0
     MSM4 = 1
+
 
 @message(0x20, 0x8A, message_length=16, input_message_length=17)
 class BinaryRTCMDataOutput:
@@ -591,6 +593,7 @@ class ConfigureBasePositionInput:
     ellipsoidal_height = SPFP()
     persist = PERSIST()
 
+
 @message(0x8B, direction=MessageDirection.OUTPUT, message_length=35)
 class ConfigureBasePositionOutput:
     base_position_mode = ENUM(BasePositionMode)
@@ -608,12 +611,130 @@ class GetGPSEphemeris:
     satellite_number = UINT8()
 
 
+gps_eph_subframe1_pattern = bitstruct.compile(
+    (
+        ">p8"  # padding byte and bit order
+        "r22p2"  # Handover word and padding
+        "u10u2u4u6u2"  # week number, C/A or P on L2, URA Index, SV Health, IODC 2MSB
+        "u1"  # L2 P data flag
+        "p23p24p24p16"  # reserved bits
+        "s8"  # Tgd
+        "u8u16"  # IODC 8LSB, t_oc
+        "s8s16"  # af2, af1
+        "s22p2"  # af0, padding
+    ),
+    [
+        "sf1_how",
+        "wn",
+        "ca_or_P_on_l2",
+        "ura_index",
+        "sv_health",
+        "iodc_2msb",
+        "l2_p_data_flag",
+        "t_gd",
+        "iodc_8lsb",
+        "t_oc",
+        "a_f2",
+        "a_f1",
+        "a_f0",
+    ],
+)
+
+gps_eph_subframe2_pattern = bitstruct.compile(
+    (
+        ">p8"   # padding byte and bit order
+        "r22p2" # Handover word and padding
+        "u8u16" # iode, c_rs
+        "u16u8" # delta_n, M_0 msb
+        "u24"   # M_0 LSB
+        "u16u8" # C_UC, e msb
+        "u24"   # e lsb
+        "u16u8" # C_us, root_a msb
+        "u24"   # root_a lsb
+        "u16u1u5p2" # t_oe, fit interval flag, AODO
+    ),
+    [
+        "sf2_how",
+        "iode",
+        "c_rs",
+        "delta_n",
+        "M_0_msb",
+        "M_0_lsb",
+        "C_UC",
+        "e_msb",
+        "e_lsb",
+        "C_us",
+        "root_a_msb",
+        "root_a_lsb",
+        "t_oe",
+        "fit_interval_flag",
+        "AODO"
+    ],
+)
+
+gps_eph_subframe3_pattern = bitstruct.compile(
+    (
+        ">p8"     # padding byte and bit order
+        "r22p2"   # Handover word and padding
+        "u16u8"   # C_ic, omega_0 msb
+        "u24"     # omega_0 lsb
+        "u16u8"   # C_is, I_0 msb
+        "u24"     # I_0 lsb
+        "u16u8"   # C_rc, w msb
+        "u24"     # w lsb
+        "u24"     # omega_dot
+        "u8u14p2" # iode, iodt, padding
+    ),
+    [
+        "sf3_how",
+        "C_ic",
+        "Omega_0_msb",
+        "Omega_0_lsb",
+        "C_is",
+        "I_0_msb",
+        "I_0_lsb",
+        "C_rc",
+        "omega_msb",
+        "omega_lsb",
+        "Omega_dot",
+        "iode",
+        "iodt",
+    ],
+)
+
+# the documentation for the module is very poor for this message. cross referencing older
+# versions of the binary message documentation shows that there is a reserved byte, followed
+# by each word of the subframe packed into 3 bytes MSB first. The first word (tlm)is missing
 @message(0x41, 0xB1, message_length=87)
 class GPSEphemeris:
     satellite_number = UINT16()
     eph_data_subframe1 = BYTES(28)
     eph_data_subframe2 = BYTES(28)
     eph_data_subframe3 = BYTES(28)
+
+    @property
+    def subframe1_fields(self):
+        # pick the words apart into their constituant fields
+        fields = gps_eph_subframe1_pattern.unpack(self.eph_data_subframe1)
+        fields["iodc"] = (fields.pop("iodc_2msb") << 8) | fields.pop("iodc_8lsb")
+        return fields
+
+    @property
+    def subframe2_fields(self):
+        fields = gps_eph_subframe2_pattern.unpack(self.eph_data_subframe2)
+        fields["M_0"] = (fields.pop("M_0_msb") << 8) | fields.pop("M_0_lsb")
+        fileds["e"] = (fields.pop("e_msb") << 8) | fields.pop("e_lsb")
+        fields["root_a"] = (fields.pop("root_a_msb") << 8) | fields.pop("root_a_lsb")
+        return fields
+
+    @property
+    def subframe3_fields(self):
+        fields = gps_eph_subframe3_pattern.unpack(self.eph_data_subframe3)
+        fields["Omega_0"] = (fields.pop("Omega_0_msb") << 24) | fields.pop("Omega_0_lsb")
+        fields["I_0"] = (fields.pop("I_0_msb") << 24) | fields.pop("I_0_lsb")
+        fields["omega"] = (fields.pop("omega_msb") << 24) | fields.pop("omega_lsb")
+        return fields
+
 
 
 @message(0x5B, direction=MessageDirection.INPUT, message_length=2)
@@ -829,6 +950,7 @@ class ExtendedRawMeasurements:
     measurement_indicator = ENUM(MeasurementIndicatorFlags)
     reserved = BYTES(1)
 
+
 @message(direction=MessageDirection.OUTPUT, message_length=7)
 class GNSSSatelliteStatus:
     channel_id = UINT8()
@@ -840,10 +962,12 @@ class GNSSSatelliteStatus:
     cn0 = SINT8()
     channel_status_indicator = ENUM(SattelliteChannelStatusIndicator)
 
+
 @arr_message(0xE7, GNSSSatelliteStatus, message_length=4)
 class GNSSSatelliteStatuses:
     version = UINT8()
     iod = UINT8()
+
 
 if __name__ == "__main__":
     import serial_asyncio
